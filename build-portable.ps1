@@ -30,6 +30,22 @@ try {
 
   $env:npm_config_cache = Join-Path $root ".npm-cache"
 
+  $payloadManifest = Join-Path $root "payload\Cargo.toml"
+  if (Test-Path $payloadManifest) {
+    Write-Host "Building payload..."
+    cargo build --release --manifest-path $payloadManifest
+    if ($LASTEXITCODE -ne 0) {
+      throw "Payload build failed with exit code $LASTEXITCODE"
+    }
+    $payloadExe = Join-Path $root "payload\target\release\openclaw.exe"
+    if (-not (Test-Path $payloadExe)) {
+      throw "Payload exe not found: $payloadExe"
+    }
+    $payloadOut = Join-Path $root "runtime\openclaw\openclaw.exe"
+    Copy-Item $payloadExe $payloadOut -Force
+    Write-Host "Payload copied to: $payloadOut"
+  }
+
   npm.cmd install
   npm.cmd --prefix app install
 

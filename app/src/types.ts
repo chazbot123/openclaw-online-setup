@@ -18,6 +18,13 @@ export interface AppConfig {
   feishuAppSecret: string;
   feishuEncryptKey: string;
   feishuVerificationToken: string;
+  wechatEnabled: boolean;
+  wechatMode: string;
+  wechatDmPolicy: string;
+  wechatPairingMessage: string;
+  wechatGroupPolicy: string;
+  wechatAllowGroups: string;
+  wechatTriggerKeyword: string;
 }
 
 export interface AppState {
@@ -39,6 +46,38 @@ export interface AppState {
 
 export interface LogBundle {
   app: string;
+  stdout: string;
+  stderr: string;
+}
+
+export interface EnvItem {
+  id: string;
+  name: string;
+  required: boolean;
+  installed: boolean;
+  version: string;
+  detail: string;
+}
+
+export interface DeployEvent {
+  stepId: string;
+  status: string;
+  message: string;
+  progress: number;
+}
+
+export interface DeploySnapshot {
+  running: boolean;
+  lastEvent: DeployEvent | null;
+  output: string;
+}
+
+export interface GatewayStatus {
+  running: boolean;
+  message: string;
+}
+
+export interface GatewayLogs {
   stdout: string;
   stderr: string;
 }

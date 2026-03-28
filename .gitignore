@@ -7,3 +7,5 @@ app/dist/
 runtime/logs/*.log
 *.log
 *setup.exe
+runtime/
+tools/

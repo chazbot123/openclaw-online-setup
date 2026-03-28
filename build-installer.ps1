@@ -27,6 +27,23 @@ if (-not (Test-Path $vcvars)) {
 Push-Location $root
 try {
   $env:npm_config_cache = Join-Path $root ".npm-cache"
+
+  $payloadManifest = Join-Path $root "payload\Cargo.toml"
+  if (Test-Path $payloadManifest) {
+    Write-Host "Building payload..."
+    cargo build --release --manifest-path $payloadManifest
+    if ($LASTEXITCODE -ne 0) {
+      throw "Payload build failed with exit code $LASTEXITCODE"
+    }
+    $payloadExe = Join-Path $root "payload\target\release\openclaw.exe"
+    if (-not (Test-Path $payloadExe)) {
+      throw "Payload exe not found: $payloadExe"
+    }
+    $payloadOut = Join-Path $root "runtime\openclaw\openclaw.exe"
+    Copy-Item $payloadExe $payloadOut -Force
+    Write-Host "Payload copied to: $payloadOut"
+  }
+
   $buildCmd = 'call "' + $vcvars + '" && set PATH=' + $cargoBin + ';%PATH% && cd /d "' + $root + '" && set npm_config_cache=' + $env:npm_config_cache + ' && npm.cmd run build:installer'
   cmd.exe /c $buildCmd
   if ($LASTEXITCODE -ne 0) {

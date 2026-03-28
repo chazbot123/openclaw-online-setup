@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "./tauri";
-import type { AppConfig, AppState, LogBundle } from "./types";
+import type { AppConfig, AppState, DeployEvent, DeploySnapshot, EnvItem, GatewayLogs, GatewayStatus, LogBundle } from "./types";
+import { listen } from "@tauri-apps/api/event";
 
 type Page = "auth" | "config" | "deploy" | "completed" | "management";
 type AiMode = "card" | "model";
@@ -10,7 +11,7 @@ const DEFAULT_MODEL_ID = "gpt-5.4";
 const menuItems: Array<{ key: Page; label: string }> = [
   { key: "auth", label: "🔑 授权验证" },
   { key: "config", label: "⚙️ 部署配置" },
-  { key: "deploy", label: "🚀 开始部署" },
+  { key: "deploy", label: "🧰 安装环境" },
   { key: "completed", label: "📈 部署情况" },
   { key: "management", label: "📊 运维管理" }
 ];
@@ -135,6 +136,11 @@ export default function App() {
   const [state, setState] = useState<AppState | null>(null);
   const [draftConfig, setDraftConfig] = useState<AppConfig | null>(null);
   const [logs, setLogs] = useState<LogBundle>(emptyLogs);
+  const [envItems, setEnvItems] = useState<EnvItem[]>([]);
+  const [deployEvent, setDeployEvent] = useState<DeployEvent | null>(null);
+  const [deploySnapshot, setDeploySnapshot] = useState<DeploySnapshot | null>(null);
+  const [gatewayStatus, setGatewayStatus] = useState<GatewayStatus | null>(null);
+  const [gatewayLogs, setGatewayLogs] = useState<GatewayLogs | null>(null);
   const [feedback, setFeedback] = useState("");
   const [busy, setBusy] = useState(false);
   const [selectedUseCase, setSelectedUseCase] = useState("ecommerce");
@@ -144,6 +150,7 @@ export default function App() {
   const [modelProvider, setModelProvider] = useState(DEFAULT_MODEL_PROVIDER);
   const [modelId, setModelId] = useState(DEFAULT_MODEL_ID);
   const [secretVisible, setSecretVisible] = useState<Record<string, boolean>>({});
+  const isTauri = typeof window !== "undefined" && (window as any).__TAURI_INTERNALS__ !== undefined;
 
   async function refreshState(targetPage?: Page) {
     try {
@@ -184,6 +191,35 @@ export default function App() {
     }
   }
 
+  async function refreshEnv() {
+    try {
+      setEnvItems(await api.getEnvStatus());
+    } catch (e) {
+      showFeedback(String(e));
+    }
+  }
+
+  async function refreshDeploySnapshot() {
+    try {
+      const snap = await api.getDeploySnapshot();
+      setDeploySnapshot(snap);
+      if (snap.lastEvent) {
+        setDeployEvent(snap.lastEvent);
+      }
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  async function refreshGateway() {
+    try {
+      setGatewayStatus(await api.getGatewayStatus());
+      setGatewayLogs(await api.readGatewayLogs());
+    } catch (e) {
+      // ignore
+    }
+  }
+
   useEffect(() => {
     refreshState();
     refreshLogs();
@@ -191,6 +227,76 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
+  useEffect(() => {
+    if (page === "deploy") {
+      refreshEnv();
+      refreshDeploySnapshot();
+    }
+  }, [page]);
+
+  useEffect(() => {
+    if (page === "completed") {
+      refreshEnv();
+    }
+  }, [page]);
+
+  useEffect(() => {
+    if (page !== "management") return;
+    const interval = setInterval(() => {
+      refreshState();
+      refreshGateway();
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [page]);
+
+  useEffect(() => {
+    if (page !== "deploy") return;
+    const interval = setInterval(refreshDeploySnapshot, 400);
+    return () => clearInterval(interval);
+  }, [page]);
+
+  useEffect(() => {
+    if (page !== "deploy") return;
+    const last = deploySnapshot?.lastEvent;
+    if (!last) return;
+    if (last.stepId === "done" && last.status === "success") {
+      refreshEnv();
+      setPage("completed");
+    }
+  }, [deploySnapshot, page]);
+
+  useEffect(() => {
+    if (!isTauri) return;
+    let unlisten: null | (() => void) = null;
+    listen<DeployEvent>("deploy_progress", (event) => {
+      setDeployEvent(event.payload);
+      setDeploySnapshot((current) => current ? { ...current, lastEvent: event.payload } : current);
+      if (event.payload.stepId === "done") {
+        refreshEnv();
+        showFeedback(event.payload.message);
+      }
+    }).then((fn) => (unlisten = fn));
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isTauri) return;
+    let unlisten: null | (() => void) = null;
+    listen<string>("deploy_output", (event) => {
+      setDeploySnapshot((current) => {
+        if (!current) return current;
+        const next = `${current.output}\n${event.payload}`.trim();
+        const lines = next.split("\n");
+        const tail = lines.slice(Math.max(0, lines.length - 800)).join("\n");
+        return { ...current, output: tail };
+      });
+    }).then((fn) => (unlisten = fn));
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
   function showFeedback(msg: string) {
     setFeedback(msg);
     setTimeout(() => setFeedback(""), 3000);
@@ -276,17 +382,26 @@ export default function App() {
 
   async function startProcess() {
     await runTask(async () => {
-      await api.startOpenClaw();
-      const nextState = await api.getAppState();
-      setState(nextState);
-      setDraftConfig(cloneConfig(nextState.config));
-      setSelectedUseCase(nextState.config.agentScenario || "ecommerce");
-      if (nextState.status === "running") {
-        showFeedback("部署成功");
-        setPage("completed");
-      } else {
-        showFeedback("未部署成功");
-      }
+      setDeployEvent({ stepId: "init", status: "running", message: "开始部署", progress: 0 });
+      await refreshDeploySnapshot();
+      await api.startDeploy();
+    });
+  }
+
+  async function startService() {
+    await runTask(async () => {
+      if (!state) return;
+      const message = await api.gatewayStart();
+      await refreshState();
+      showFeedback(message || "服务已启动");
+    });
+  }
+
+  async function stopService() {
+    await runTask(async () => {
+      const message = await api.gatewayStop();
+      await refreshState();
+      showFeedback(message || "服务已停止");
     });
   }
 
@@ -343,17 +458,13 @@ export default function App() {
     return <div className="loading-shell">加载中...</div>;
   }
 
-  const deploymentReady = state.status === "running";
+  const serviceRunning = state.status === "running";
   const managementMode: AiMode = state.config.provider === "OpenClawCard" ? "card" : "model";
   const tokenStatus = estimateTokenStatus(state.config.apiKey, managementMode);
 
   function navigatePage(target: Page) {
     if (!state) return;
     if (!state.isAuthorized) return;
-    if ((target === "completed" || target === "management") && !deploymentReady) {
-      showFeedback("未部署成功");
-      return;
-    }
     setPage(target);
   }
 
@@ -592,6 +703,70 @@ export default function App() {
               </div>
             </div>
 
+            <div className="panel">
+              <h3>🟩 微信通道（个人微信）</h3>
+              <p style={{ color: "var(--text-muted)", marginBottom: 24, fontSize: "0.9rem" }}>
+                参考 OpenClaw 微信通道教程：先安装频道插件 clawhub install channel-wechat，然后运行 openclaw gateway 扫码登录。
+              </p>
+
+              <div className="form-group" style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <input
+                  type="checkbox"
+                  checked={Boolean(draftConfig.wechatEnabled)}
+                  onChange={(e) => updateDraft("wechatEnabled", e.target.checked)}
+                  id="wechat-enabled"
+                />
+                <label htmlFor="wechat-enabled" style={{ margin: 0 }}>启用个人微信通道</label>
+              </div>
+
+              <div className="form-row">
+                <div className="form-group">
+                  <label>私聊策略</label>
+                  <select value={draftConfig.wechatDmPolicy} onChange={(e) => updateDraft("wechatDmPolicy", e.target.value)}>
+                    <option value="pairing">pairing（推荐：配对码激活）</option>
+                    <option value="allowlist">allowlist（仅白名单）</option>
+                    <option value="open">open（所有人可用）</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label>群聊策略</label>
+                  <select value={draftConfig.wechatGroupPolicy} onChange={(e) => updateDraft("wechatGroupPolicy", e.target.value)}>
+                    <option value="allowlist">allowlist（推荐）</option>
+                    <option value="open">open</option>
+                    <option value="disabled">disabled</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label>配对提示文案</label>
+                <input
+                  placeholder="请发送配对码以激活 AI 助手"
+                  value={draftConfig.wechatPairingMessage}
+                  onChange={(e) => updateDraft("wechatPairingMessage", e.target.value)}
+                />
+              </div>
+
+              <div className="form-row">
+                <div className="form-group">
+                  <label>允许群聊（用逗号分隔群名）</label>
+                  <input
+                    placeholder="AI交流群,技术讨论"
+                    value={draftConfig.wechatAllowGroups}
+                    onChange={(e) => updateDraft("wechatAllowGroups", e.target.value)}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>群聊触发关键词</label>
+                  <input
+                    placeholder="@AI"
+                    value={draftConfig.wechatTriggerKeyword}
+                    onChange={(e) => updateDraft("wechatTriggerKeyword", e.target.value)}
+                  />
+                </div>
+              </div>
+            </div>
+
             <div style={{ display: "flex", justifyContent: "flex-end" }}>
               <button className="btn btn-primary" onClick={saveConfigAndNext} disabled={busy}>
                 保存并前往部署 ➔
@@ -602,39 +777,61 @@ export default function App() {
 
         {page === "deploy" && (
           <div>
-            <h2>正在部署</h2>
-            <p style={{ color: "var(--text-muted)", marginBottom: 32 }}>请耐心等待，部署过程完全自动化</p>
+            <h2>安装</h2>
+            <p style={{ color: "var(--text-muted)", marginBottom: 32 }}>
+              {envItems.filter((i) => i.required && !i.installed).length} 个必需组件待安装
+            </p>
 
             <div className="panel">
-              <div style={{ marginBottom: 16, display: "flex", justifyContent: "space-between" }}>
-                <span>部署状态: {state.status === "running" ? "运行中" : "已准备就绪"}</span>
+              <div style={{ marginBottom: 12, display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                <div style={{ color: "var(--text-muted)" }}>{deployEvent ? deployEvent.message : "点击一键安装开始"}</div>
+                <div style={{ fontWeight: 700 }}>{deployEvent ? `${deployEvent.progress}%` : ""}</div>
               </div>
               <div style={{ background: "rgba(15, 23, 42, 0.08)", height: 8, borderRadius: 4, overflow: "hidden", marginBottom: 16 }}>
                 <div style={{ 
                   height: "100%", 
-                  width: state.status === "running" ? "100%" : "0%", 
+                  width: deployEvent ? `${deployEvent.progress}%` : "0%", 
                   background: "var(--accent)", 
                   transition: "width 0.5s" 
                 }}></div>
               </div>
               
-              <div style={{ display: "flex", gap: 16, marginTop: 24 }}>
-                {state.status === "running" ? (
-                  <button className="btn" onClick={stopProcess} disabled={busy} style={{ background: "#ef4444", color: "white" }}>
-                    停止部署
-                  </button>
-                ) : (
-                  <button className="btn btn-primary" onClick={startProcess} disabled={busy}>
-                    开始部署
-                  </button>
-                )}
+              <div style={{ display: "flex", gap: 16, marginTop: 16, flexWrap: "wrap" }}>
+                <button className="btn" onClick={refreshEnv} disabled={busy}>
+                  重新检测
+                </button>
+                <button className="btn btn-primary" onClick={startProcess} disabled={busy}>
+                  一键安装
+                </button>
               </div>
             </div>
 
             <div className="panel">
-              <h3>📋 部署日志</h3>
+              <h3>组件状态</h3>
+              <div style={{ display: "grid", gap: 12 }}>
+                {envItems.map((item) => (
+                  <div key={item.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "14px 16px", borderRadius: 14, border: "1px solid rgba(15, 23, 42, 0.08)", background: "rgba(15, 23, 42, 0.03)" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                      <div style={{ width: 22, height: 22, display: "grid", placeItems: "center", borderRadius: 999, background: item.installed ? "rgba(16,185,129,0.12)" : "rgba(239,68,68,0.12)", color: item.installed ? "#10b981" : "#ef4444", fontWeight: 900 }}>
+                        {item.installed ? "✓" : "✕"}
+                      </div>
+                      <div>
+                        <div style={{ fontWeight: 700 }}>{item.name}</div>
+                        <div style={{ color: "var(--text-muted)", fontSize: 13 }}>{item.detail}</div>
+                      </div>
+                    </div>
+                    <div style={{ color: item.installed ? "#10b981" : "#ef4444", fontWeight: 800 }}>
+                      {item.installed ? item.version || "已安装" : "未安装"}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="panel">
+              <h3>安装输出</h3>
               <div className="log-viewer">
-                {logs.stdout || logs.stderr || logs.app || "等待部署开始..."}
+                {(deploySnapshot?.output || "").trim() || "等待输出..."}
               </div>
             </div>
           </div>
@@ -643,52 +840,40 @@ export default function App() {
         {page === "completed" && (
           <div>
             <h2>部署情况</h2>
-            <p style={{ color: "var(--text-muted)", marginBottom: 32 }}>
-              {deploymentReady ? "当前实例已部署成功并处于运行中" : "当前还未部署成功，请先前往“开始部署”执行部署"}
+            <p style={{ color: "var(--text-muted)", marginBottom: 24 }}>
+              {serviceRunning ? "服务运行中" : "环境安装完成，可前往运维管理启动服务"}
             </p>
 
-            {deploymentReady && (
-              <div className="panel" style={{ textAlign: "center", padding: "40px 32px", marginBottom: 32 }}>
-                <div style={{ fontSize: 64, marginBottom: 24 }}>🎉</div>
-                <h3 style={{ justifyContent: "center" }}>部署成功！</h3>
-                <p style={{ color: "var(--text-muted)", marginBottom: 32 }}>
-                  系统已启动并正在运行。您可以前往管理页面查看运行状态，或在下方选择一个场景为您自动配置最佳方案。
-                </p>
-                <button className="btn btn-primary" onClick={() => navigatePage("management")}>
-                  前往运维管理
-                </button>
+            <div className="panel" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+              <div>
+                <div style={{ fontWeight: 800, marginBottom: 6 }}>{serviceRunning ? "OpenClaw 核心服务已启动" : "依赖环境已就绪"}</div>
+                <div style={{ color: "var(--text-muted)" }}>可以前往运维管理查看状态与日志。</div>
               </div>
-            )}
-
-            <div className="use-cases-header">
-              <div style={{ color: "var(--accent)" }}>
-                <svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24">
-                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm0-14c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6-2.69-6-6-6zm0 10c-2.21 0-4-1.79-4-4s1.79-4 4-4 4 1.79 4 4-1.79 4-4 4zm0-7c-1.65 0-3 1.35-3 3s1.35 3 3 3 3-1.35 3-3-1.35-3-3-3z" />
-                </svg>
-              </div>
-              <h3>使用场景</h3>
-              <span>— 选择场景自动配置最佳方案</span>
+              <button className="btn btn-primary" onClick={() => navigatePage("management")}>
+                前往运维管理
+              </button>
             </div>
 
-            <div className="use-cases-grid">
-              {useCases.map(uc => (
-                <div 
-                  key={uc.id} 
-                  className={`use-case-card ${selectedUseCase === uc.id ? "active" : ""}`}
-                  onClick={() => {
-                    if (!deploymentReady) {
-                      showFeedback("未部署成功");
-                      return;
-                    }
-                    applyUseCase(uc.id);
-                  }}
-                >
-                  <div className="use-case-icon">{uc.icon}</div>
-                  <h4 className="use-case-title">{uc.title}</h4>
-                  <p className="use-case-desc">{uc.desc}</p>
-                  <span className="use-case-tags">{uc.tags}</span>
-                </div>
-              ))}
+            <div className="panel" style={{ marginTop: 20 }}>
+              <h3>组件状态</h3>
+              <div style={{ display: "grid", gap: 12 }}>
+                {envItems.map((item) => (
+                  <div key={item.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "14px 16px", borderRadius: 14, border: "1px solid rgba(15, 23, 42, 0.08)", background: "rgba(15, 23, 42, 0.03)" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                      <div style={{ width: 22, height: 22, display: "grid", placeItems: "center", borderRadius: 999, background: item.installed ? "rgba(16,185,129,0.12)" : "rgba(239,68,68,0.12)", color: item.installed ? "#10b981" : "#ef4444", fontWeight: 900 }}>
+                        {item.installed ? "✓" : "✕"}
+                      </div>
+                      <div>
+                        <div style={{ fontWeight: 700 }}>{item.name}</div>
+                        <div style={{ color: "var(--text-muted)", fontSize: 13 }}>{item.detail}</div>
+                      </div>
+                    </div>
+                    <div style={{ color: item.installed ? "#10b981" : "#ef4444", fontWeight: 800 }}>
+                      {item.installed ? item.version || "已安装" : "未安装"}
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         )}
@@ -706,23 +891,33 @@ export default function App() {
                 </div>
                 <div className="status-info">
                   <h4>OpenClaw 核心服务</h4>
-                  <p>{state.status === "running" ? "正常运行中" : "已停止"}</p>
+                  <p>{gatewayStatus?.running ? "正常运行中" : "已停止"}</p>
                 </div>
               </div>
               
               <div style={{ marginTop: 24, display: "flex", gap: 16 }}>
-                <button className="btn" onClick={startProcess} disabled={busy || state.status === "running"} style={{ background: "#10b981", color: "white" }}>
+                <button className="btn" onClick={startService} disabled={busy} style={{ background: "#10b981", color: "white" }}>
                   启动服务
                 </button>
-                <button className="btn" onClick={stopProcess} disabled={busy || state.status !== "running"} style={{ background: "#ef4444", color: "white" }}>
+                <button className="btn" onClick={stopService} disabled={busy} style={{ background: "#ef4444", color: "white" }}>
                   停止服务
                 </button>
                 <button className="btn" onClick={async () => {
-                  await api.openControlPage();
-                  showFeedback("已打开本地控制页");
+                  await api.openOpenClawDashboard();
+                  showFeedback("已打开 OpenClaw Dashboard");
                 }} disabled={busy}>
                   打开控制台
                 </button>
+                <button className="btn" onClick={() => api.openLogsDir()} disabled={busy}>
+                  打开日志目录
+                </button>
+              </div>
+            </div>
+
+            <div className="panel">
+              <h3>网关日志</h3>
+              <div className="log-viewer">
+                {(gatewayLogs?.stderr || gatewayLogs?.stdout || "").trim() || "暂无输出（启动后可在此查看错误）"}
               </div>
             </div>
 
@@ -731,7 +926,7 @@ export default function App() {
               {tokenStatus ? (
                 <div>
                   <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
-                    <span>{managementMode === "card" ? "卡密 Token 额度进度" : "API Key Token 额度进度"}</span>
+                    <span>{managementMode === "card" ? "卡密 Token 额度进度（预估）" : "API Key Token 额度进度（预估）"}</span>
                     <span>{tokenStatus.usedPercent}%</span>
                   </div>
                   <div className="token-progress">
@@ -740,10 +935,57 @@ export default function App() {
                   <div style={{ marginTop: 12, color: "var(--text-muted)", fontSize: "0.9rem" }}>
                     剩余余额：¥{tokenStatus.remainingBalance} / ¥{tokenStatus.totalBalance}
                   </div>
+                  <div style={{ marginTop: 14, display: "flex", gap: 12, flexWrap: "wrap" }}>
+                    <button className="btn" onClick={() => refreshState()} disabled={busy}>
+                      刷新
+                    </button>
+                    <button className="btn btn-primary" onClick={() => api.openOpenClawDashboard()} disabled={busy}>
+                      打开 Dashboard（实时）
+                    </button>
+                  </div>
                 </div>
               ) : (
-                <p style={{ color: "var(--text-muted)", margin: 0 }}>当前未配置可用的 Token / API Key。</p>
+                <div>
+                  <p style={{ color: "var(--text-muted)", margin: 0 }}>当前未配置可用的 Token / API Key。</p>
+                  <div style={{ marginTop: 14, display: "flex", gap: 12, flexWrap: "wrap" }}>
+                    <button className="btn" onClick={() => refreshState()} disabled={busy}>
+                      刷新
+                    </button>
+                    <button className="btn btn-primary" onClick={() => api.openOpenClawDashboard()} disabled={busy}>
+                      打开 Dashboard
+                    </button>
+                  </div>
+                </div>
               )}
+            </div>
+
+            <div className="panel">
+              <h3>通道配置状态</h3>
+              <div style={{ display: "grid", gap: 12 }}>
+                <div style={{ padding: "14px 16px", borderRadius: 14, border: "1px solid rgba(15, 23, 42, 0.08)", background: "rgba(15, 23, 42, 0.03)" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                    <div style={{ fontWeight: 800 }}>飞书</div>
+                    <div style={{ color: state.config.feishuAppId && state.config.feishuAppSecret ? "#10b981" : "#ef4444", fontWeight: 800 }}>
+                      {state.config.feishuAppId && state.config.feishuAppSecret ? "已配置" : "未配置"}
+                    </div>
+                  </div>
+                  <div style={{ marginTop: 8, color: "var(--text-muted)", fontSize: 13 }}>
+                    AppId：{state.config.feishuAppId ? "已填写" : "未填写"}；AppSecret：{state.config.feishuAppSecret ? "已填写" : "未填写"}
+                  </div>
+                </div>
+
+                <div style={{ padding: "14px 16px", borderRadius: 14, border: "1px solid rgba(15, 23, 42, 0.08)", background: "rgba(15, 23, 42, 0.03)" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                    <div style={{ fontWeight: 800 }}>个人微信</div>
+                    <div style={{ color: state.config.wechatEnabled ? "#10b981" : "#64748b", fontWeight: 800 }}>
+                      {state.config.wechatEnabled ? "已启用" : "未启用"}
+                    </div>
+                  </div>
+                  <div style={{ marginTop: 8, color: "var(--text-muted)", fontSize: 13 }}>
+                    私聊策略：{state.config.wechatDmPolicy || "-"}；群聊策略：{state.config.wechatGroupPolicy || "-"}；触发词：{state.config.wechatTriggerKeyword || "-"}
+                  </div>
+                </div>
+              </div>
             </div>
             
             <div className="panel">

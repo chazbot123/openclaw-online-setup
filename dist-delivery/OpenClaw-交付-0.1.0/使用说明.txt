@@ -1,0 +1,17 @@
+OpenClaw 交付包（Windows）
+
+1) 双击运行：OpenClaw 部署器_0.1.0_x64-setup.exe
+2) 一路“下一步”安装完成后，从开始菜单启动。
+
+重要说明（避免卡死/无法写入）：
+- 安装包内置运行载荷，启动时会自动复制到用户的 AppData 运行目录并从那里启动。
+- 这样可以避免 Program Files\...\_up_ 目录里的文件被占用，导致安装/升级写入失败。
+
+运行目录（可写，存放配置/日志/载荷副本）：
+- %APPDATA%\local.openclaw.usbportable\
+  - runtime\config\app-config.json
+  - runtime\logs\
+
+排障：
+- 安装提示“无法打开要写入的文件 openclaw.exe”：先在任务管理器结束 openclaw.exe，再点 Retry。
+- 点击“开始部署”卡住：打开 runtime\logs\app.log 与 openclaw-stderr.log 查看最后 50 行。

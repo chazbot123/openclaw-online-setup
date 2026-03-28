@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AppConfig, AppState, LogBundle } from "./types";
+import type { AppConfig, AppState, DeploySnapshot, EnvItem, GatewayLogs, GatewayStatus, LogBundle } from "./types";
 
 const isTauri = typeof window !== "undefined" && (window as any).__TAURI_INTERNALS__ !== undefined;
 
@@ -31,6 +31,13 @@ const mockConfig: AppConfig = {
   feishuAppSecret: "",
   feishuEncryptKey: "",
   feishuVerificationToken: "",
+  wechatEnabled: false,
+  wechatMode: "personal",
+  wechatDmPolicy: "pairing",
+  wechatPairingMessage: "请发送配对码以激活 AI 助手",
+  wechatGroupPolicy: "allowlist",
+  wechatAllowGroups: "",
+  wechatTriggerKeyword: "@AI",
   bindHost: "127.0.0.1",
   port: 8080
 };
@@ -119,5 +126,42 @@ export const api = {
   openInstallDir: async () => {
     if (isTauri) return invoke<void>("open_install_dir");
     console.log("[Mock] Opening install dir");
-  }
+  },
+  getEnvStatus: async () => {
+    if (isTauri) return invoke<EnvItem[]>("get_env_status");
+    return [
+      { id: "node", name: "Node.js", required: true, installed: true, version: "v24.14.0", detail: "系统安装" },
+      { id: "npm", name: "npm", required: true, installed: true, version: "11.9.0", detail: "系统安装" },
+      { id: "git", name: "Git（可选）", required: false, installed: true, version: "git version 2.53.0.windows.2", detail: "系统安装" },
+      { id: "openclaw", name: "OpenClaw", required: true, installed: false, version: "", detail: "未安装" }
+    ];
+  },
+  startDeploy: async () => {
+    if (isTauri) return invoke<void>("start_deploy");
+    await new Promise(r => setTimeout(r, 800));
+  },
+  getDeploySnapshot: async () => {
+    if (isTauri) return invoke<DeploySnapshot>("get_deploy_snapshot");
+    return { running: false, lastEvent: null, output: "" };
+  },
+  openOpenClawDashboard: async () => {
+    if (isTauri) return invoke<void>("open_openclaw_dashboard");
+    console.log("[Mock] Opening OpenClaw dashboard");
+  },
+  gatewayStart: async () => {
+    if (isTauri) return invoke<string>("gateway_start");
+    return "OK";
+  },
+  gatewayStop: async () => {
+    if (isTauri) return invoke<string>("gateway_stop");
+    return "OK";
+  },
+  getGatewayStatus: async () => {
+    if (isTauri) return invoke<GatewayStatus>("get_gateway_status");
+    return { running: false, message: "未运行" };
+  },
+  readGatewayLogs: async () => {
+    if (isTauri) return invoke<GatewayLogs>("read_gateway_logs");
+    return { stdout: "", stderr: "" };
+  },
 };

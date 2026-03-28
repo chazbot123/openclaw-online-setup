@@ -29,10 +29,7 @@
       "icon": ["icons/icon.ico"],
       "useLocalToolsDir": true,
       "resources": [
-        "../runtime/**/*",
-        "../docs/**/*",
-        "../README.md",
-        "../dev-notes.md"
+        "../runtime/**/*"
       ],
       "windows": {
         "nsis": {

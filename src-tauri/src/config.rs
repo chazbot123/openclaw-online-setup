@@ -23,7 +23,14 @@ pub const DEFAULT_CONFIG: &str = r#"{
   "feishuAppId": "",
   "feishuAppSecret": "",
   "feishuEncryptKey": "",
-  "feishuVerificationToken": ""
+  "feishuVerificationToken": "",
+  "wechatEnabled": false,
+  "wechatMode": "personal",
+  "wechatDmPolicy": "pairing",
+  "wechatPairingMessage": "请发送配对码以激活 AI 助手",
+  "wechatGroupPolicy": "allowlist",
+  "wechatAllowGroups": "",
+  "wechatTriggerKeyword": "@AI"
 }"#;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,6 +60,20 @@ pub struct AppConfig {
     pub feishu_encrypt_key: String,
     #[serde(default)]
     pub feishu_verification_token: String,
+    #[serde(default)]
+    pub wechat_enabled: bool,
+    #[serde(default)]
+    pub wechat_mode: String,
+    #[serde(default)]
+    pub wechat_dm_policy: String,
+    #[serde(default)]
+    pub wechat_pairing_message: String,
+    #[serde(default)]
+    pub wechat_group_policy: String,
+    #[serde(default)]
+    pub wechat_allow_groups: String,
+    #[serde(default)]
+    pub wechat_trigger_keyword: String,
 }
 
 impl Default for AppConfig {
