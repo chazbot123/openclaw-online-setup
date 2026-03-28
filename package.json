@@ -1,0 +1,18 @@
+{
+  "name": "openclaw-usb-portable",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "app:install": "npm --prefix app install",
+    "app:dev": "npm --prefix app run dev",
+    "app:build": "npm --prefix app run build",
+    "tauri": "tauri",
+    "dev": "npm run tauri -- dev --config src-tauri/tauri.conf.json",
+    "build": "npm run app:build && npm run tauri -- build --no-bundle --config src-tauri/tauri.conf.json",
+    "build:installer": "npm run app:build && npm run tauri -- build --config src-tauri/tauri.conf.json",
+    "license:dev": "node license-server/server.js"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0"
+  }
+}

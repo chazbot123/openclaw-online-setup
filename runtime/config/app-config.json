@@ -1,0 +1,12 @@
+{
+  "provider": "",
+  "baseUrl": "",
+  "apiKey": "",
+  "model": "",
+  "port": 3847,
+  "workspaceDir": "runtime/workspace",
+  "dataDir": "runtime/data",
+  "logDir": "runtime/logs",
+  "licenseMode": "mock",
+  "bindHost": "127.0.0.1"
+}

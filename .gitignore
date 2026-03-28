@@ -1,0 +1,9 @@
+node_modules/
+target/
+src-tauri/target/
+dist-portable/
+app/dist/
+.npm-cache/
+runtime/logs/*.log
+*.log
+*setup.exe

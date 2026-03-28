@@ -1,0 +1,47 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "OpenClaw 部署器",
+  "version": "0.1.0",
+  "identifier": "local.openclaw.usbportable",
+  "build": {
+    "beforeDevCommand": "npm --prefix app run dev",
+    "beforeBuildCommand": "npm --prefix app run build",
+    "frontendDist": "../app/dist",
+    "devUrl": "http://127.0.0.1:1420"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "OpenClaw 部署器",
+        "width": 1280,
+        "height": 860,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+      "active": true,
+      "targets": ["nsis"],
+      "icon": ["icons/icon.ico"],
+      "useLocalToolsDir": true,
+      "resources": [
+        "../runtime/**/*",
+        "../docs/**/*",
+        "../README.md",
+        "../dev-notes.md"
+      ],
+      "windows": {
+        "nsis": {
+          "installerIcon": "icons/icon.ico",
+          "languages": ["SimpChinese"],
+          "displayLanguageSelector": false,
+          "compression": "lzma",
+          "installMode": "perMachine"
+        }
+      }
+    }
+}
