@@ -148,6 +148,10 @@ export const api = {
     if (isTauri) return invoke<void>("open_openclaw_dashboard");
     console.log("[Mock] Opening OpenClaw dashboard");
   },
+  wechatStartLogin: async () => {
+    if (isTauri) return invoke<string>("wechat_start_login");
+    return "已打开微信扫码终端，请在弹出窗口中扫描二维码";
+  },
   gatewayStart: async () => {
     if (isTauri) return invoke<string>("gateway_start");
     return "OK";

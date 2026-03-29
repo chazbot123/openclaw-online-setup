@@ -83,6 +83,11 @@ fn open_openclaw_dashboard(engine: State<'_, DeployEngine>, runtime: State<'_, A
 }
 
 #[tauri::command]
+fn wechat_start_login(engine: State<'_, DeployEngine>, runtime: State<'_, AppRuntime>) -> Result<String, String> {
+    engine.wechat_start_login(&runtime).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn gateway_start(engine: State<'_, DeployEngine>, runtime: State<'_, AppRuntime>) -> Result<String, String> {
     engine.gateway_start(&runtime).map_err(|e| e.to_string())
 }
@@ -130,6 +135,7 @@ fn main() {
             start_deploy,
             get_deploy_snapshot,
             open_openclaw_dashboard,
+            wechat_start_login,
             gateway_start,
             gateway_stop,
             get_gateway_status,

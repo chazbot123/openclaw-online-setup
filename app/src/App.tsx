@@ -1,12 +1,22 @@
 import { useEffect, useState } from "react";
 import { api } from "./tauri";
-import type { AppConfig, AppState, DeployEvent, DeploySnapshot, EnvItem, GatewayLogs, GatewayStatus, LogBundle } from "./types";
+import type { AppConfig, AppState, DeployEvent, DeploySnapshot, EnvItem, GatewayLogs, GatewayStatus } from "./types";
 import { listen } from "@tauri-apps/api/event";
 
 type Page = "auth" | "config" | "deploy" | "completed" | "management";
 type AiMode = "card" | "model";
 const DEFAULT_MODEL_PROVIDER = "OpenAI";
-const DEFAULT_MODEL_ID = "gpt-5.4";
+const PROVIDER_FIXED_MODEL: Record<string, string> = {
+  OpenAI: "gpt-4o-mini",
+  Anthropic: "claude-3-7-sonnet-latest",
+  Google: "gemini-2.5-flash",
+  xAI: "grok-3-mini-fast",
+  GLM: "zai/glm-5-turbo",
+  Kimi: "k2p5",
+  DeepSeek: "deepseek-chat",
+  MiniMax: "MiniMax-M2.7-highspeed",
+};
+const DEFAULT_MODEL_ID = PROVIDER_FIXED_MODEL[DEFAULT_MODEL_PROVIDER];
 
 const menuItems: Array<{ key: Page; label: string }> = [
   { key: "auth", label: "🔑 授权验证" },
@@ -15,8 +25,6 @@ const menuItems: Array<{ key: Page; label: string }> = [
   { key: "completed", label: "📈 部署情况" },
   { key: "management", label: "📊 运维管理" }
 ];
-
-const emptyLogs: LogBundle = { app: "", stdout: "", stderr: "" };
 
 const useCases = [
   { id: "content", icon: "📄", title: "内容创作", desc: "自动搜集资料、撰写文章、SEO优化", tags: "agent-browser · academic-research" },
@@ -36,54 +44,41 @@ const useCases = [
   { id: "custom", icon: "⚙️", title: "自定义", desc: "手动配置所有选项", tags: "完全自定义" }
 ];
 
-const providerModels: Record<string, Array<{ value: string; label: string }>> = {
-  OpenAI: [
-    { value: "gpt-5.4", label: "gpt-5.4（旗舰，2026.3 最新）" },
-    { value: "gpt-5.4-thinking", label: "gpt-5.4-thinking（深度推理版）" },
-    { value: "gpt-5.4-pro", label: "gpt-5.4-pro（高性能版）" },
-    { value: "gpt-4o", label: "gpt-4o（当前商用主力）" },
-    { value: "gpt-4o-mini", label: "gpt-4o-mini（轻量 / 低价）" },
-    { value: "gpt-4-turbo", label: "gpt-4-turbo" },
-    { value: "gpt-3.5-turbo", label: "gpt-3.5-turbo" }
-  ],
-  Anthropic: [
-    { value: "claude-4.6-opus", label: "claude-4.6-opus（旗舰）" },
-    { value: "claude-4.6-sonnet", label: "claude-4.6-sonnet（平衡）" },
-    { value: "claude-4.6-haiku", label: "claude-4.6-haiku（轻量 / 低价）" }
-  ],
-  Google: [
-    { value: "gemini-3.1-ultra", label: "gemini-3.1-ultra（2026.3 旗舰）" },
-    { value: "gemini-3.1-pro", label: "gemini-3.1-pro（商用主力）" },
-    { value: "gemini-3.1-flash", label: "gemini-3.1-flash（轻量 / 高速）" },
-    { value: "gemini-2.5-pro", label: "gemini-2.5-pro" },
-    { value: "gemini-2.5-flash", label: "gemini-2.5-flash" }
-  ],
-  xAI: [
-    { value: "grok-4.1", label: "grok-4.1" },
-    { value: "grok-4.1-fast", label: "grok-4.1-fast" },
-    { value: "grok-4", label: "grok-4" },
-    { value: "grok-4-fast", label: "grok-4-fast" },
-    { value: "grok-code-fast-1", label: "grok-code-fast-1" }
-  ],
-  GLM: [
-    { value: "glm-5-turbo", label: "glm-5-turbo（2026 旗舰）" },
-    { value: "glm-5", label: "glm-5" },
-    { value: "glm-4-v", label: "glm-4-v" }
-  ],
-  Kimi: [
-    { value: "kimi-k2.5", label: "kimi-k2.5（2026 最新）" },
-    { value: "kimi-meta-long", label: "kimi-meta-long（超长上下文）" }
-  ],
-  DeepSeek: [
-    { value: "deepseek-v3.2", label: "deepseek-v3.2" },
-    { value: "deepseek-coder-v3", label: "deepseek-coder-v3（代码）" },
-    { value: "deepseek-llm-67b-chat", label: "deepseek-llm-67b-chat" }
-  ],
-  MiniMax: [
-    { value: "minimax-m2.7", label: "minimax-m2.7" },
-    { value: "minimax-m2.5", label: "minimax-m2.5" }
-  ]
-};
+function inferProviderFromModelId(model: string): string | null {
+  const lower = (model || "").toLowerCase().trim();
+  if (!lower) return null;
+  if (lower.includes("/")) {
+    const [provider] = lower.split("/", 2);
+    if (provider === "openai") return "OpenAI";
+    if (provider === "anthropic") return "Anthropic";
+    if (provider === "google" || provider === "gemini") return "Google";
+    if (provider === "xai" || provider === "grok") return "xAI";
+    if (provider === "glm" || provider === "zhipuai" || provider === "bigmodel") return "GLM";
+    if (provider === "kimi" || provider === "moonshot") return "Kimi";
+    if (provider === "deepseek") return "DeepSeek";
+    if (provider === "minimax") return "MiniMax";
+  }
+  if (lower.startsWith("gpt-")) return "OpenAI";
+  if (lower.startsWith("claude-")) return "Anthropic";
+  if (lower.startsWith("gemini-")) return "Google";
+  if (lower.startsWith("grok-")) return "xAI";
+  if (lower.startsWith("glm-")) return "GLM";
+  if (lower.startsWith("kimi-") || lower.startsWith("moonshot-")) return "Kimi";
+  if (lower.startsWith("deepseek-")) return "DeepSeek";
+  if (lower.startsWith("minimax-")) return "MiniMax";
+  return null;
+}
+
+function normalizeProvider(provider: string, model: string) {
+  if (PROVIDER_FIXED_MODEL[provider]) return provider;
+  const inferred = inferProviderFromModelId(model);
+  if (inferred && PROVIDER_FIXED_MODEL[inferred]) return inferred;
+  return DEFAULT_MODEL_PROVIDER;
+}
+
+function fixedModelForProvider(provider: string) {
+  return PROVIDER_FIXED_MODEL[provider] || DEFAULT_MODEL_ID;
+}
 
 const feishuPermissionConfig = `{
   "scopes": {
@@ -135,7 +130,6 @@ export default function App() {
   const [page, setPage] = useState<Page>("auth");
   const [state, setState] = useState<AppState | null>(null);
   const [draftConfig, setDraftConfig] = useState<AppConfig | null>(null);
-  const [logs, setLogs] = useState<LogBundle>(emptyLogs);
   const [envItems, setEnvItems] = useState<EnvItem[]>([]);
   const [deployEvent, setDeployEvent] = useState<DeployEvent | null>(null);
   const [deploySnapshot, setDeploySnapshot] = useState<DeploySnapshot | null>(null);
@@ -148,7 +142,6 @@ export default function App() {
   const [cardToken, setCardToken] = useState("");
   const [modelApiKey, setModelApiKey] = useState("");
   const [modelProvider, setModelProvider] = useState(DEFAULT_MODEL_PROVIDER);
-  const [modelId, setModelId] = useState(DEFAULT_MODEL_ID);
   const [secretVisible, setSecretVisible] = useState<Record<string, boolean>>({});
   const isTauri = typeof window !== "undefined" && (window as any).__TAURI_INTERNALS__ !== undefined;
 
@@ -165,9 +158,9 @@ export default function App() {
         setAiMode("card");
         setCardToken(nextState.config.apiKey || "");
       } else {
+        const normalizedProvider = normalizeProvider(nextState.config.provider || DEFAULT_MODEL_PROVIDER, nextState.config.model || "");
         setAiMode("model");
-        setModelProvider(nextState.config.provider || DEFAULT_MODEL_PROVIDER);
-        setModelId(nextState.config.model || (providerModels[nextState.config.provider || DEFAULT_MODEL_PROVIDER]?.[0]?.value ?? DEFAULT_MODEL_ID));
+        setModelProvider(normalizedProvider);
         setModelApiKey(nextState.config.apiKey || "");
       }
       
@@ -183,11 +176,11 @@ export default function App() {
     }
   }
 
-  async function refreshLogs() {
+  async function refreshStateLite() {
     try {
-      setLogs(await api.readLogs());
-    } catch (e) {
-      // ignore
+      setState(await api.getAppState());
+    } catch (err) {
+      showFeedback(String(err));
     }
   }
 
@@ -222,9 +215,8 @@ export default function App() {
 
   useEffect(() => {
     refreshState();
-    refreshLogs();
-    const interval = setInterval(refreshLogs, 500);
-    return () => clearInterval(interval);
+    refreshEnv();
+    refreshGateway();
   }, []);
 
   useEffect(() => {
@@ -237,13 +229,22 @@ export default function App() {
   useEffect(() => {
     if (page === "completed") {
       refreshEnv();
+      refreshGateway();
     }
+  }, [page]);
+
+  useEffect(() => {
+    if (page !== "completed") return;
+    const interval = setInterval(() => {
+      refreshGateway();
+    }, 5000);
+    return () => clearInterval(interval);
   }, [page]);
 
   useEffect(() => {
     if (page !== "management") return;
     const interval = setInterval(() => {
-      refreshState();
+      refreshStateLite();
       refreshGateway();
     }, 2000);
     return () => clearInterval(interval);
@@ -318,17 +319,13 @@ export default function App() {
   }
 
   function changeProvider(nextProvider: string) {
-    const nextModels = providerModels[nextProvider] ?? [];
-    const nextModel = nextModels[0]?.value ?? "";
     setModelProvider(nextProvider);
-    setModelId(nextModel);
   }
 
   function switchAiMode(nextMode: AiMode) {
     setAiMode(nextMode);
-    if (nextMode === "model" && !providerModels[modelProvider]) {
+    if (nextMode === "model" && !PROVIDER_FIXED_MODEL[modelProvider]) {
       setModelProvider(DEFAULT_MODEL_PROVIDER);
-      setModelId(providerModels[DEFAULT_MODEL_PROVIDER]?.[0]?.value ?? DEFAULT_MODEL_ID);
     }
   }
 
@@ -352,12 +349,16 @@ export default function App() {
   async function saveConfigAndNext() {
     if (!draftConfig) return;
     await runTask(async () => {
+      const normalizedProvider = normalizeProvider(modelProvider, "");
       const nextConfig: AppConfig = {
         ...draftConfig,
-        provider: aiMode === "card" ? "OpenClawCard" : modelProvider,
-        model: aiMode === "card" ? "quota-token" : modelId,
+        provider: aiMode === "card" ? "OpenClawCard" : normalizedProvider,
+        model: aiMode === "card" ? "quota-token" : fixedModelForProvider(normalizedProvider),
         apiKey: aiMode === "card" ? cardToken.trim() : modelApiKey.trim(),
       };
+      if (aiMode === "model") {
+        setModelProvider(normalizedProvider);
+      }
       setDraftConfig(nextConfig);
       await api.saveAppConfig(nextConfig);
       await refreshState("deploy");
@@ -402,6 +403,13 @@ export default function App() {
       const message = await api.gatewayStop();
       await refreshState();
       showFeedback(message || "服务已停止");
+    });
+  }
+
+  async function startWechatLogin() {
+    await runTask(async () => {
+      const message = await api.wechatStartLogin();
+      showFeedback(message || "已打开微信扫码终端");
     });
   }
 
@@ -461,10 +469,31 @@ export default function App() {
   const serviceRunning = state.status === "running";
   const managementMode: AiMode = state.config.provider === "OpenClawCard" ? "card" : "model";
   const tokenStatus = estimateTokenStatus(state.config.apiKey, managementMode);
+  const requiredEnvInstalled = envItems.filter((item) => item.required).length > 0 && envItems.filter((item) => item.required).every((item) => item.installed);
+  const deployLast = deploySnapshot?.lastEvent;
+  const deploySucceeded = (deployLast?.stepId === "done" && deployLast?.status === "success") || requiredEnvInstalled;
+  const gatewayOutput = `${gatewayLogs?.stdout || ""}\n${gatewayLogs?.stderr || ""}`.toLowerCase();
+  const feishuConfigured = Boolean(state.config.feishuAppId && state.config.feishuAppSecret);
+  const wechatConfigured = Boolean(state.config.wechatEnabled);
+  const feishuConnected =
+    feishuConfigured &&
+    gatewayStatus?.running === true &&
+    gatewayOutput.includes("feishu") &&
+    (gatewayOutput.includes("connect") || gatewayOutput.includes("ready") || gatewayOutput.includes("启动") || gatewayOutput.includes("已连接"));
+  const wechatConnected =
+    wechatConfigured &&
+    gatewayStatus?.running === true &&
+    gatewayOutput.includes("wechat") &&
+    (gatewayOutput.includes("login") || gatewayOutput.includes("扫码") || gatewayOutput.includes("connected") || gatewayOutput.includes("已连接"));
+  const lockedOpsPage = !deploySucceeded;
 
   function navigatePage(target: Page) {
     if (!state) return;
     if (!state.isAuthorized) return;
+    if ((target === "completed" || target === "management") && lockedOpsPage) {
+      showFeedback("未完成部署，暂不可进入部署情况和运维管理");
+      return;
+    }
     setPage(target);
   }
 
@@ -485,7 +514,10 @@ export default function App() {
               key={item.key}
               className={`nav-item ${page === item.key ? "active" : ""}`}
               onClick={() => navigatePage(item.key)}
-              disabled={!state.isAuthorized && item.key !== "auth"}
+              disabled={
+                (!state.isAuthorized && item.key !== "auth") ||
+                (state.isAuthorized && (item.key === "completed" || item.key === "management") && lockedOpsPage)
+              }
               type="button"
             >
               {item.label}
@@ -558,7 +590,7 @@ export default function App() {
                 </button>
                 <button type="button" className={`mode-card ${aiMode === "model" ? "active" : ""}`} onClick={() => switchAiMode("model")}>
                   <strong>模型模式</strong>
-                  <span>按厂商选择模型并配置 API KEY</span>
+                  <span>按厂商使用固定性价比模型并配置 API KEY</span>
                 </button>
               </div>
 
@@ -613,14 +645,8 @@ export default function App() {
                   </div>
 
                   <div className="form-group" style={{ marginBottom: 0 }}>
-                    <label>模型 ID</label>
-                    <select value={modelId} onChange={(e) => setModelId(e.target.value)}>
-                      {(providerModels[modelProvider] ?? []).map((m) => (
-                        <option key={m.value} value={m.value}>
-                          {m.label}
-                        </option>
-                      ))}
-                    </select>
+                    <label>固定模型 ID（已按性价比预设）</label>
+                    <input value={fixedModelForProvider(modelProvider)} disabled />
                   </div>
                 </div>
               )}
@@ -841,15 +867,15 @@ export default function App() {
           <div>
             <h2>部署情况</h2>
             <p style={{ color: "var(--text-muted)", marginBottom: 24 }}>
-              {serviceRunning ? "服务运行中" : "环境安装完成，可前往运维管理启动服务"}
+              {deploySucceeded ? (serviceRunning ? "部署成功，服务运行中" : "部署成功，可前往运维管理启动服务") : "尚未完成部署，请先前往“安装环境”完成部署"}
             </p>
 
             <div className="panel" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
               <div>
-                <div style={{ fontWeight: 800, marginBottom: 6 }}>{serviceRunning ? "OpenClaw 核心服务已启动" : "依赖环境已就绪"}</div>
-                <div style={{ color: "var(--text-muted)" }}>可以前往运维管理查看状态与日志。</div>
+                <div style={{ fontWeight: 800, marginBottom: 6 }}>{deploySucceeded ? "部署成功" : "部署未完成"}</div>
+                <div style={{ color: "var(--text-muted)" }}>{deploySucceeded ? "可以前往运维管理查看状态与日志。" : "请先完成安装并确保已检测到 OpenClaw 运行载荷。"}</div>
               </div>
-              <button className="btn btn-primary" onClick={() => navigatePage("management")}>
+              <button className="btn btn-primary" onClick={() => navigatePage("management")} disabled={!deploySucceeded}>
                 前往运维管理
               </button>
             </div>
@@ -873,6 +899,42 @@ export default function App() {
                     </div>
                   </div>
                 ))}
+              </div>
+            </div>
+
+            <div className="panel" style={{ marginTop: 20 }}>
+              <h3>通道配置状态</h3>
+              <div style={{ display: "grid", gap: 12 }}>
+                <div style={{ padding: "14px 16px", borderRadius: 14, border: "1px solid rgba(15, 23, 42, 0.08)", background: "rgba(15, 23, 42, 0.03)" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                    <div style={{ fontWeight: 800 }}>飞书</div>
+                    <div style={{ color: feishuConnected ? "#10b981" : "#ef4444", fontWeight: 800 }}>
+                      {feishuConnected ? "接入成功" : "未接通"}
+                    </div>
+                  </div>
+                  <div style={{ marginTop: 8, color: "var(--text-muted)", fontSize: 13 }}>
+                    {feishuConfigured ? "已填写飞书配置，等待网关实际连通结果。" : "未填写 AppId / AppSecret。"}
+                  </div>
+                </div>
+
+                <div style={{ padding: "14px 16px", borderRadius: 14, border: "1px solid rgba(15, 23, 42, 0.08)", background: "rgba(15, 23, 42, 0.03)" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                    <div style={{ fontWeight: 800 }}>个人微信</div>
+                    <div style={{ color: wechatConnected ? "#10b981" : "#ef4444", fontWeight: 800 }}>
+                      {wechatConnected ? "接入成功" : "未接通"}
+                    </div>
+                  </div>
+                  <div style={{ marginTop: 8, color: "var(--text-muted)", fontSize: 13 }}>
+                    {wechatConfigured ? "已启用微信通道，点击下方按钮弹出二维码终端进行扫码。" : "未启用微信通道。"}
+                  </div>
+                  {wechatConfigured && (
+                    <div style={{ marginTop: 12 }}>
+                      <button className="btn btn-primary" onClick={startWechatLogin} disabled={busy}>
+                        获取微信二维码
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           </div>
@@ -959,35 +1021,6 @@ export default function App() {
               )}
             </div>
 
-            <div className="panel">
-              <h3>通道配置状态</h3>
-              <div style={{ display: "grid", gap: 12 }}>
-                <div style={{ padding: "14px 16px", borderRadius: 14, border: "1px solid rgba(15, 23, 42, 0.08)", background: "rgba(15, 23, 42, 0.03)" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-                    <div style={{ fontWeight: 800 }}>飞书</div>
-                    <div style={{ color: state.config.feishuAppId && state.config.feishuAppSecret ? "#10b981" : "#ef4444", fontWeight: 800 }}>
-                      {state.config.feishuAppId && state.config.feishuAppSecret ? "已配置" : "未配置"}
-                    </div>
-                  </div>
-                  <div style={{ marginTop: 8, color: "var(--text-muted)", fontSize: 13 }}>
-                    AppId：{state.config.feishuAppId ? "已填写" : "未填写"}；AppSecret：{state.config.feishuAppSecret ? "已填写" : "未填写"}
-                  </div>
-                </div>
-
-                <div style={{ padding: "14px 16px", borderRadius: 14, border: "1px solid rgba(15, 23, 42, 0.08)", background: "rgba(15, 23, 42, 0.03)" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-                    <div style={{ fontWeight: 800 }}>个人微信</div>
-                    <div style={{ color: state.config.wechatEnabled ? "#10b981" : "#64748b", fontWeight: 800 }}>
-                      {state.config.wechatEnabled ? "已启用" : "未启用"}
-                    </div>
-                  </div>
-                  <div style={{ marginTop: 8, color: "var(--text-muted)", fontSize: 13 }}>
-                    私聊策略：{state.config.wechatDmPolicy || "-"}；群聊策略：{state.config.wechatGroupPolicy || "-"}；触发词：{state.config.wechatTriggerKeyword || "-"}
-                  </div>
-                </div>
-              </div>
-            </div>
-            
             <div className="panel">
               <h3>系统信息</h3>
               <div className="form-group">
